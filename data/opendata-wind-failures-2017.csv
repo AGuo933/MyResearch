@@ -1,13 +1,3 @@
-Turbine_ID,Component,Timestamp,Remarks
-T01,TRANSFORMER,2017-08-11T13:14:00+00:00,"Transformer fan damaged"
-T06,GEARBOX,2017-10-17T08:38:00+00:00,"Gearbox bearings damaged"
-T06,HYDRAULIC_GROUP,2017-08-19T09:47:00+00:00,"Oil leakage in Hub"
-T07,GENERATOR_BEARING,2017-08-20T06:08:00+00:00,"Generator bearings damaged"
-T07,GENERATOR,2017-08-21T14:47:00+00:00,"Generator damaged"
-T07,HYDRAULIC_GROUP,2017-06-17T11:35:00+00:00,"Oil leakage in Hub"
-T07,HYDRAULIC_GROUP,2017-10-19T10:11:00+00:00,"Oil leakage in Hub"
-T09,GEARBOX,2017-10-18T08:32:00+00:00,"Gearbox noise"
-T09,GENERATOR_BEARING,2017-01-25T12:55:00+00:00,"Generator bearings replaced"
-T09,HYDRAULIC_GROUP,2017-09-16T15:46:00+00:00,"Pitch position error related GH"
-T11,HYDRAULIC_GROUP,2017-04-26T18:06:00+00:00,"Hydraulic group error in the brake circuit"
-T11,HYDRAULIC_GROUP,2017-09-12T15:30:00+00:00,"Hydraulic group error in the brake circuit"
+version https://git-lfs.github.com/spec/v1
+oid sha256:947864fa50dcbb9247ef11d325d099e01934a17073cd457b0d24245c83f04a1a
+size 904
