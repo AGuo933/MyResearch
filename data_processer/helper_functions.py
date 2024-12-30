@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import seaborn as sns
 
 import windrose
 from windrose import WindroseAxes
@@ -11,6 +12,7 @@ from tabulate import tabulate
 
 from IPython.display import display, HTML
 from matplotlib.cm import ScalarMappable
+from sklearn.neighbors import LocalOutlierFactor
 
 
 def load_scada_data(base_path: str, lst_files: list) -> dict:
@@ -469,3 +471,229 @@ def plot_overview_cockpit(base_path, dct_scada, df_data_overview, trb_id, freq_=
     plt.close()  # Close the figure to free memory
 
     print(f"Saved figure for turbine {trb_id} to {fig_path}")
+
+
+def plot_power_scatter(df_scada: pd.DataFrame, trb_id: str, save_path: str = None):
+    """
+    绘制风力涡轮机的功率散点图。
+
+    Args:
+        df_scada (pd.DataFrame): 包含风速和功率数据的DataFrame
+        trb_id (str): 涡轮机ID
+        save_path (str, optional): 图片保存路径
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    wind_speeds = df_scada["wind_speed"].values
+    actual_powers = df_scada.power.values
+
+    # 读取并处理标准功率曲线
+    df_pc = prepare_power_curve("data/powercurve.csv")
+    # 根据实际涡轮机的最大功率调整标准功率曲线
+    df_pc_scaled = df_pc / 2000 * df_scada["power"].max()
+
+    # 计算期望功率和偏差
+    expected_powers = np.array(
+        [df_pc_scaled.loc[np.round(speed, 2)].values[0] for speed in wind_speeds]
+    )
+    distances = actual_powers - expected_powers
+
+    # 绘制散点图
+    norm = plt.Normalize(distances.min(), distances.max())
+    scatter = ax.scatter(
+        wind_speeds,
+        actual_powers,
+        c=distances,
+        cmap="viridis",
+        alpha=0.25,
+        edgecolor="black",
+        label="Measured",
+    )
+
+    # 添加颜色条和标准功率曲线
+    cbar = plt.colorbar(scatter, ax=ax)
+    cbar.set_label("Distance from Power Curve")
+    ax.plot(df_pc_scaled.index, df_pc_scaled["power_norm"], c="k", label="Standard PC")
+
+    ax.set_xlabel("Wind Speed (m/s)")
+    ax.set_ylabel("Power Output (kW)")
+    ax.set_title(f"Power Curve - Turbine {trb_id}")
+    ax.grid(True)
+    ax.legend()
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close()
+    else:
+        plt.show()
+
+
+def clean_power_curve_data(
+    df_scada: pd.DataFrame, n_neighbors: int = 20, contamination: float = 0.05
+):
+    """
+    清洗风机运行数据，去除异常值。
+
+    Args:
+        df_scada (pd.DataFrame): 包含风速和功率数据的DataFrame
+        n_neighbors (int, optional): KNN算法的邻居数量，默认为5
+        contamination (float, optional): 预期的异常值比例，默认为0.1
+
+    Returns:
+        pd.DataFrame: 清洗后的数据
+    """
+
+    # 1. 移除功率小于等于0的数据
+    df_clean = df_scada[df_scada["power"] > 0].copy()
+
+    # 2. 准备用于异常检测的特征
+    X = df_clean[["wind_speed", "power"]].values
+
+    # 3. 使用LOF进行异常检测
+    lof = LocalOutlierFactor(n_neighbors=n_neighbors, contamination=contamination)
+
+    # 预测结果：1表示正常值，-1表示异常值
+    y_pred = lof.fit_predict(X)
+
+    # 4. 保留正常值
+    df_clean = df_clean[y_pred == 1]
+
+    # 5. 按风速排序
+    df_clean = df_clean.sort_values("wind_speed")
+
+    return df_clean
+
+
+def save_cleaned_data(
+    df_clean: pd.DataFrame, trb_id: str, save_path: str = "data/cleaned_data"
+):
+    """
+    保存清洗后的数据到CSV文件，只保留指定的变量。
+
+    Args:
+        df_clean (pd.DataFrame): 已经清洗好的DataFrame数据
+        trb_id (str): 涡轮机ID
+        save_path (str, optional): 保存路径，默认为'data/cleaned_data'
+    """
+    # 创建保存目录（如果不存在）
+    os.makedirs(save_path, exist_ok=True)
+
+    # 选择要保存的列
+    selected_columns = [
+        # 风速相关
+        "Amb_WindSpeed_Avg",
+        "Amb_WindSpeed_Max",
+        "Amb_WindSpeed_Min",
+        "Amb_WindSpeed_Est_Avg",
+        "wind_speed",
+        # 风向相关
+        "Amb_WindDir_Abs_Avg",
+        "Amb_WindDir_Relative_Avg",
+        "wind_direction",
+        # 机舱方向
+        "Nac_Direction_Avg",
+        # 桨距角
+        "Blds_PitchAngle_Min",
+        "Blds_PitchAngle_Max",
+        "Blds_PitchAngle_Avg",
+        "Blds_PitchAngle_Std",
+        # 发电机轴承温度
+        "Gen_Bear_Temp_Avg",
+        "Gen_Bear2_Temp_Avg",
+        # 舱内温度
+        "Nac_Temp_Avg",
+        # 功率放在最后
+        "power",
+    ]
+
+    # 检查哪些列实际存在于数据中
+    available_columns = [col for col in selected_columns if col in df_clean.columns]
+
+    # 创建新的DataFrame，保持时间索引
+    df_save = df_clean[available_columns].copy()
+
+    # 构建文件名
+    file_name = f"turbine_{trb_id}_cleaned.csv"
+    file_path = os.path.join(save_path, file_name)
+
+    # 保存为CSV，包含时间索引
+    df_save.to_csv(file_path)
+
+    print(f"Saved cleaned data for turbine {trb_id} to {file_path}")
+    print(f"Saved columns: {available_columns}")
+
+
+def analyze_power_correlations(
+    df_clean: pd.DataFrame,
+    power_col: str = "power",
+    plot_heatmap: bool = True,
+    trb_id: str = None,
+) -> pd.DataFrame:
+    """
+    计算所有变量与功率的斯皮尔曼相关系数并可选择性地绘制热力图。
+
+    Args:
+        df_clean (pd.DataFrame): 清洗后的数据
+        power_col (str): 功率列的名称，默认为'power'
+        plot_heatmap (bool): 是否绘制热力图，默认为True
+        trb_id (str): 涡轮机ID，用于保存文件名，默认为None
+
+    Returns:
+        pd.DataFrame: 包含相关系数的DataFrame，按相关性绝对值降序排列
+    """
+    # 计算所有列与功率的斯皮尔曼相关系数
+    correlations = pd.DataFrame()
+    correlations["variable"] = df_clean.columns
+    correlations["correlation"] = [
+        df_clean[col].corr(df_clean[power_col], method="spearman")
+        for col in df_clean.columns
+    ]
+
+    # 移除功率列本身的相关系数
+    correlations = correlations[correlations["variable"] != power_col]
+
+    # 按相关系数绝对值降序排列
+    correlations["abs_correlation"] = correlations["correlation"].abs()
+    correlations = correlations.sort_values("abs_correlation", ascending=False)
+    correlations = correlations.drop("abs_correlation", axis=1)
+
+    # 打印结果
+    print("\n相关性分析结果:")
+    print("================")
+    print(tabulate(correlations, headers="keys", tablefmt="pretty", floatfmt=".3f"))
+
+    # 绘制热力图
+    if plot_heatmap:
+        plt.figure(figsize=(12, 8))
+
+        # 创建相关性矩阵
+        heatmap_data = pd.DataFrame(
+            index=correlations["variable"],
+            columns=["Power Correlation"],
+            data=correlations["correlation"].values,
+        )
+
+        # 绘制热力图，移除数值标注
+        sns.heatmap(
+            heatmap_data,
+            annot=False,  # 设置为False以移除数值标注
+            cmap="coolwarm",
+            center=0,
+            square=True,
+            vmin=-1,
+            vmax=1,
+        )
+        plt.title(f"Power Correlation Heatmap - Turbine {trb_id}")
+        plt.tight_layout()
+
+        # 创建images文件夹（如果不存在）
+        os.makedirs("images", exist_ok=True)
+
+        # 保存图片
+        filename = f"power_correlation_heatmap_{trb_id}.png"
+        plt.savefig(f"images/{filename}", dpi=300, bbox_inches="tight")
+        plt.close()
+
+    return correlations
