@@ -544,24 +544,26 @@ def clean_power_curve_data(
     Returns:
         pd.DataFrame: 清洗后的数据
     """
+    # 1. 移除包含NaN的行
+    df_clean = df_scada.dropna().copy()
 
-    # 1. 移除功率小于等于0的数据
-    df_clean = df_scada[df_scada["power"] > 0].copy()
+    # 2. 移除功率小于等于0的数据
+    df_clean = df_clean[df_clean["power"] > 0]
 
-    # 2. 准备用于异常检测的特征
+    # 3. 准备用于异常检测的特征
     X = df_clean[["wind_speed", "power"]].values
 
-    # 3. 使用LOF进行异常检测
+    # 4. 使用LOF进行异常检测
     lof = LocalOutlierFactor(n_neighbors=n_neighbors, contamination=contamination)
 
     # 预测结果：1表示正常值，-1表示异常值
     y_pred = lof.fit_predict(X)
 
-    # 4. 保留正常值
+    # 5. 保留正常值
     df_clean = df_clean[y_pred == 1]
 
-    # 5. 按风速排序
-    df_clean = df_clean.sort_values("wind_speed")
+    # 6. 按时间排序
+    df_clean = df_clean.sort_index()
 
     return df_clean
 

@@ -4,6 +4,7 @@ from models.encoder import Encoder, EncoderLayer
 from models.attn import ProbAttention, AttentionLayer
 from models.embed import DataEmbedding
 import torch.nn.functional as F
+import logging
 
 
 class Informer(nn.Module):
@@ -65,27 +66,30 @@ class Informer(nn.Module):
                 nn.init.xavier_uniform_(p)
 
     def forward(self, x, time_features):
-        # 输入检查
-        if torch.isnan(x).any():
-            print("Input contains NaN!")
+        try:
+            # 输入处理
+            x = x.squeeze(1)
+            x = self.input_norm(x)
+            x = x.unsqueeze(1)
+
+            # Transformer processing
+            enc_out = self.enc_embedding(x, time_features)
+
+            # 移除残差连接，因为维度不匹配
+            enc_out, _ = self.encoder(enc_out)
+
+            # 使用最后一个时间步的特征
+            enc_out = enc_out[:, -1, :]  # [batch_size, d_model]
+
+            # 多层预测头
+            enc_out = F.relu(self.pre_fc(enc_out))
+            enc_out = self.fc(enc_out)
+
+            return enc_out
+
+        except Exception as e:
+            logging.error(f"Error in model forward pass: {str(e)}")
+            logging.error(
+                f"Input shapes - x: {x.shape}, time_features: {time_features.shape}"
+            )
             return None
-
-        # 输入归一化
-        x = x.squeeze(1)  # [batch_size, feature_dim]
-        x = self.input_norm(x)
-        x = x.unsqueeze(1)  # [batch_size, 1, feature_dim]
-
-        # Transformer processing
-        enc_out = self.enc_embedding(x, time_features)
-
-        # 移除残差连接，因为维度不匹配
-        enc_out, _ = self.encoder(enc_out)
-
-        # 使用最后一个时间步的特征
-        enc_out = enc_out[:, -1, :]  # [batch_size, d_model]
-
-        # 多层预测头
-        enc_out = F.relu(self.pre_fc(enc_out))
-        enc_out = self.fc(enc_out)
-
-        return enc_out
