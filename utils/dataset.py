@@ -14,22 +14,21 @@ class TimeSeriesDataset(Dataset):
             train_ratio: 训练集比例
         """
         # 读取CSV文件
-        df = pd.read_csv(filepath)
+        df = pd.read_csv(
+            filepath,
+            parse_dates=[0],  # 第一列解析为日期
+            dtype={col: float for col in range(1, 18)},  # 其他列为float
+        )
 
-        # 将时间字符串转换为datetime对象
-        df["datetime"] = pd.to_datetime(df.iloc[:, 0])
-
-        # 使用 timefeatures 提取时间特征
-        dates_df = pd.DataFrame({"date": df["datetime"]})
-        time_features_data = time_features(
-            dates_df, timeenc=1, freq="h"
-        )  # 返回 4 个特征
+        # 提取时间特征
+        dates_df = pd.DataFrame({"date": df.iloc[:, 0]})
+        time_features_data = time_features(dates_df, timeenc=1, freq="h")
 
         # 提取特征和标签
-        features = df.iloc[:, 1:-1].values  # 排除第一列(时间)和最后一列(标签)
-        labels = df.iloc[:, -1].values  # 最后一列(power)
+        features = df.iloc[:, 1:-1].values  # 16列输入特征
+        labels = df.iloc[:, -1].values  # 最后一列作为标签
 
-        # 数据标准化 (只标准化特征，不标准化时间)
+        # 数据标准化
         self.feature_means = features.mean(axis=0)
         self.feature_stds = features.std(axis=0)
         self.label_mean = labels.mean()
@@ -43,25 +42,30 @@ class TimeSeriesDataset(Dataset):
         train_size = int(total_len * train_ratio)
 
         if train:
-            self.x_data = normalized_features[:train_size]
-            self.y_data = normalized_labels[:train_size]
-            self.time_data = time_features_data[:train_size]
+            self.features = torch.FloatTensor(normalized_features[:train_size])
+            self.labels = torch.FloatTensor(normalized_labels[:train_size])
+            self.time_features = torch.FloatTensor(time_features_data[:train_size])
         else:
-            self.x_data = normalized_features[train_size:]
-            self.y_data = normalized_labels[train_size:]
-            self.time_data = time_features_data[train_size:]
+            self.features = torch.FloatTensor(normalized_features[train_size:])
+            self.labels = torch.FloatTensor(normalized_labels[train_size:])
+            self.time_features = torch.FloatTensor(time_features_data[train_size:])
 
-        # 转换为torch tensor
-        self.features = torch.FloatTensor(self.x_data)
-        self.labels = torch.FloatTensor(self.y_data)
-        self.time_features = torch.FloatTensor(self.time_data)
-        self.len = len(self.labels)
+        # 重塑特征维度
+        self.features = self.features.unsqueeze(
+            1
+        )  # [N, feature_dim] -> [N, 1, feature_dim]
 
     def __getitem__(self, index):
-        return self.features[index], self.time_features[index], self.labels[index]
+        """返回单个样本的特征和标签"""
+        return (
+            self.features[index],  # [1, feature_dim]
+            self.labels[index],  # [1]
+            self.time_features[index],  # [time_feature_dim]
+        )
 
     def __len__(self):
-        return self.len
+        """返回数据集大小"""
+        return len(self.features)
 
     def inverse_transform_y(self, y):
         """将标准化的y值转换回原始值"""

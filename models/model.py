@@ -8,30 +8,39 @@ from models.embed import DataEmbedding
 class Informer(nn.Module):
     def __init__(
         self,
-        enc_in=17,  # 17个输入特征(16个原始特征 + 1个时间特征)
-        d_model=128,  # 嵌入维度
-        n_heads=8,  # 注意力头数
-        e_layers=3,  # encoder层数
-        d_ff=512,  # 前馈网络维度
+        enc_in=16,
+        d_model=128,
+        n_heads=8,
+        e_layers=3,
+        d_ff=512,
         dropout=0.2,
-        activation="gelu",
     ):
         super(Informer, self).__init__()
 
-        # Encoding
-        self.enc_embedding = DataEmbedding(
-            enc_in, d_model, embed_type="timeF", freq="h", dropout=dropout
+        # CNN feature extraction
+        self.conv1 = nn.Sequential(
+            nn.Conv1d(16, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
         )
 
-        # Attention
-        Attn = ProbAttention
+        self.conv2 = nn.Sequential(
+            nn.Conv1d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+        )
+
+        # Encoding
+        self.enc_embedding = DataEmbedding(
+            64, d_model, embed_type="timeF", freq="h", dropout=dropout
+        )
 
         # Encoder
         self.encoder = Encoder(
             [
                 EncoderLayer(
                     AttentionLayer(
-                        Attn(
+                        ProbAttention(
                             False,
                             factor=5,
                             attention_dropout=dropout,
@@ -44,7 +53,7 @@ class Informer(nn.Module):
                     d_model,
                     d_ff,
                     dropout=dropout,
-                    activation=activation,
+                    activation="gelu",
                 )
                 for _ in range(e_layers)
             ],
@@ -52,22 +61,27 @@ class Informer(nn.Module):
         )
 
         # Output projection
-        self.fc = nn.Linear(d_model, 1)  # 最终输出为1维
+        self.fc = nn.Linear(d_model, 1)
 
-    def forward(self, x, time_features, enc_self_mask=None):
-        # x shape: [batch_size, features]
-        # time_features shape: [batch_size, 3] (month, weekday, day)
+    def forward(self, x, time_features):
+        batch_size = x.size(0)
 
-        # 添加序列维度
-        x = x.unsqueeze(1)  # [batch_size, 1, features]
-        time_mark = time_features.unsqueeze(1)  # [batch_size, 1, 3]
+        # 调整输入维度
+        x = x.squeeze(1)  # [batch_size, feature_dim]
+        x = x.unsqueeze(2)  # [batch_size, feature_dim, 1]
 
-        # Embedding
-        enc_out = self.enc_embedding(x, time_mark)
+        # CNN feature extraction
+        x = self.conv1(x)  # [batch_size, 32, 1]
+        x = self.conv2(x)  # [batch_size, 64, 1]
 
-        # 后续处理保持不变
-        enc_out, _ = self.encoder(enc_out, attn_mask=enc_self_mask)
-        enc_out = enc_out.reshape(enc_out.size(0), -1)
-        output = self.fc(enc_out)
+        x = x.transpose(1, 2)  # [batch_size, 1, 64]
+
+        # Transformer processing
+        enc_out = self.enc_embedding(x, time_features)  # [batch_size, 1, d_model]
+        enc_out, _ = self.encoder(enc_out)
+
+        # 使用最后一个时间步的特征
+        enc_out = enc_out[:, -1, :]  # [batch_size, d_model]
+        output = self.fc(enc_out)  # [batch_size, 1]
 
         return output

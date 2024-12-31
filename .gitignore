@@ -6,6 +6,7 @@ __pycache__/
 .Python
 *.egg
 *.egg-info/
+*.log
 
 # Virtual Environment
 venv/

@@ -17,8 +17,8 @@ logging.basicConfig(
 
 # 超参数
 BATCH_SIZE = 32
-LEARNING_RATE = 0.01
-WEIGHT_DECAY = 0.0001
+LEARNING_RATE = 0.001
+WEIGHT_DECAY = 0.01
 EPOCHS = 100
 TRAIN_RATIO = 0.8
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -28,16 +28,30 @@ def train_one_epoch(model, train_loader, criterion, optimizer):
     """训练一个epoch"""
     model.train()
     total_loss = 0
-    for batch_x, batch_time, batch_y in train_loader:
+    for batch_x, batch_y, batch_x_mark in train_loader:
         optimizer.zero_grad()
 
-        # 将数据移到GPU（如果使用的话）
-        batch_x = batch_x.to(DEVICE)
-        batch_time = batch_time.to(DEVICE)
-        batch_y = batch_y.to(DEVICE)
+        # 将数据移到GPU并确保数据类型
+        batch_x = batch_x.float().to(DEVICE)
+        batch_x_mark = batch_x_mark.float().to(DEVICE)
+        batch_y = batch_y.float().to(DEVICE)
+
+        # 添加梯度裁剪
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
         # 前向传播
-        output = model(batch_x, batch_time)
+        output = model(batch_x, batch_x_mark)
+        output = output.squeeze()
+        batch_y = batch_y.squeeze()
+
+        # 检查并打印数值
+        if torch.isnan(output).any() or torch.isnan(batch_y).any():
+            print("NaN detected in output or target!")
+            print("Output:", output)
+            print("Target:", batch_y)
+            continue
+
+        # 计算损失
         loss = criterion(output, batch_y)
 
         # 反向传播
@@ -49,42 +63,34 @@ def train_one_epoch(model, train_loader, criterion, optimizer):
     return total_loss / len(train_loader.dataset)
 
 
-def validate(model, val_loader, criterion, val_dataset):
-    """验证函数"""
+def validate(model, val_loader, criterion):
+    """验证模型性能"""
     model.eval()
     total_loss = 0
     predictions = []
-    targets = []
+    actuals = []
 
     with torch.no_grad():
-        for batch_x, batch_time, batch_y in val_loader:
-            # 将数据移到GPU
+        for batch_x, batch_y, batch_x_mark in val_loader:  # 修改这里，只接收3个值
             batch_x = batch_x.to(DEVICE)
-            batch_time = batch_time.to(DEVICE)
+            batch_x_mark = batch_x_mark.to(DEVICE)
             batch_y = batch_y.to(DEVICE)
 
-            # 前向传播
-            outputs = model(batch_x, batch_time)
-            loss = criterion(outputs, batch_y)
+            output = model(batch_x, batch_x_mark)
+            output = output.squeeze()
+            batch_y = batch_y.squeeze()
 
+            loss = criterion(output, batch_y)
             total_loss += loss.item() * batch_x.size(0)
 
-            # 收集预测结果
-            predictions.extend(outputs.cpu().numpy())
-            targets.extend(batch_y.cpu().numpy())
+            predictions.extend(output.cpu().numpy())
+            actuals.extend(batch_y.cpu().numpy())
 
-    # 计算评估指标
-    predictions = np.array(predictions)
-    targets = np.array(targets)
+    val_loss = total_loss / len(val_loader.dataset)
+    rmse = np.sqrt(val_loss)
+    mae = np.mean(np.abs(np.array(predictions) - np.array(actuals)))
 
-    # 将标准化的值转换回原始值
-    predictions = val_dataset.inverse_transform_y(predictions)
-    targets = val_dataset.inverse_transform_y(targets)
-
-    rmse = np.sqrt(np.mean((predictions - targets) ** 2))
-    mae = np.mean(np.abs(predictions - targets))
-
-    return total_loss / len(val_loader.dataset), rmse, mae
+    return val_loss, rmse, mae
 
 
 def main():
@@ -118,33 +124,40 @@ def main():
 
     # 初始化模型
     model = Informer(
-        enc_in=17,  # 17个输入特征(16个原始特征 + 1个时间特征)
-        d_model=128,  # 嵌入维度
-        n_heads=8,  # 注意力头数
-        e_layers=3,  # encoder层数
-        d_ff=512,  # 前馈网络维度
-        dropout=0.2,
+        enc_in=16,
+        d_model=128,
+        n_heads=8,
+        e_layers=3,
+        d_ff=512,
+        dropout=0.1,
     ).to(DEVICE)
 
     # 定义损失函数和优化器
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY, amsgrad=True
     )
 
-    # 训练循环
+    # 添加学习率调度器
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.5, patience=5, verbose=True
+    )
+
+    # 参考CNN-Informer的训练循环
+    train_loss_list = []
+    test_loss_list = []
     best_val_loss = float("inf")
+
     for epoch in range(EPOCHS):
         # 训练
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer)
 
         # 验证
-        val_loss, rmse, mae = validate(model, val_loader, criterion, val_datasets[0])
+        val_loss, rmse, mae = validate(model, val_loader, criterion)
 
-        # 记录日志
-        logging.info(f"Epoch {epoch+1}/{EPOCHS}:")
-        logging.info(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
-        logging.info(f"RMSE: {rmse:.2f}, MAE: {mae:.2f}")
+        # 记录损失
+        train_loss_list.append(train_loss)
+        test_loss_list.append(val_loss)
 
         # 保存最佳模型
         if val_loss < best_val_loss:
@@ -153,6 +166,13 @@ def main():
                 model.state_dict(),
                 save_dir / f'best_model_{datetime.now().strftime("%Y%m%d_%H%M")}.pth',
             )
+
+        # 打印训练信息
+        print(f"Epoch: {epoch}, TrainLoss: {train_loss}, TestLoss: {val_loss}")
+        print(f"RMSE: {rmse:.4f}, MAE: {mae:.4f}")
+
+    # 保存训练记录用于绘图
+    np.savetxt("./训练记录.csv", [train_loss_list], delimiter=",")
 
 
 if __name__ == "__main__":
