@@ -24,6 +24,26 @@ TRAIN_RATIO = 0.8
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+class EarlyStopping:
+    def __init__(self, patience=7, min_delta=0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_loss = None
+        self.early_stop = False
+
+    def __call__(self, val_loss):
+        if self.best_loss is None:
+            self.best_loss = val_loss
+        elif val_loss > self.best_loss - self.min_delta:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_loss = val_loss
+            self.counter = 0
+
+
 def train_one_epoch(model, train_loader, criterion, optimizer):
     """训练一个epoch"""
     model.train()
@@ -41,7 +61,7 @@ def train_one_epoch(model, train_loader, criterion, optimizer):
             batch_y = batch_y.float().to(DEVICE)
 
             # 前向传播
-            output = model(batch_x, batch_x_mark)
+            output, _ = model(batch_x, batch_x_mark)  # 忽略注意力权重
 
             if output is None:
                 logging.error(
@@ -190,10 +210,16 @@ def main():
             optimizer, mode="min", factor=0.5, patience=5
         )
 
+        # 早停
+        early_stopping = EarlyStopping(patience=10, min_delta=1e-4)
+
+        # 记录最佳模型
+        best_val_loss = float("inf")
+        best_model_path = "saved_models/best_model.pth"
+
         # 训练循环
         train_loss_list = []
         test_loss_list = []
-        best_val_loss = float("inf")
         no_improvement_count = 0
 
         for epoch in range(EPOCHS):
@@ -222,11 +248,16 @@ def main():
             # 保存最佳模型
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                model_path = (
-                    save_dir
-                    / f'best_model_{datetime.now().strftime("%Y%m%d_%H%M")}.pth'
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "train_loss": train_loss,
+                        "val_loss": val_loss,
+                    },
+                    best_model_path,
                 )
-                torch.save(model.state_dict(), model_path)
                 logging.info(
                     f"New best model saved! Previous best: {best_val_loss:.4f}, New best: {val_loss:.4f}"
                 )
@@ -236,10 +267,21 @@ def main():
                 if no_improvement_count >= 10:
                     logging.warning(f"No improvement for {no_improvement_count} epochs")
 
+            # 早停检查
+            early_stopping(val_loss)
+            if early_stopping.early_stop:
+                logging.info("Early stopping triggered")
+                break
+
             # 打印训练信息
             logging.info(f"Epoch {epoch+1} Summary:")
             logging.info(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
             logging.info(f"RMSE: {rmse:.4f}, MAE: {mae:.4f}")
+
+        # 训练结束后，加载最佳模型
+        checkpoint = torch.load(best_model_path)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        logging.info(f"Training completed. Best validation loss: {best_val_loss:.4f}")
 
     except Exception as e:
         logging.error(f"Training failed with error: {str(e)}")

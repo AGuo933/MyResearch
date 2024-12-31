@@ -94,11 +94,11 @@ class TemporalEmbedding(nn.Module):
 
 
 class TimeFeatureEmbedding(nn.Module):
-    def __init__(self, d_model, embed_type="timeF", freq="h"):
+    def __init__(self, d_model, embed_type="timeF", freq="h", time_dim=5):
         super(TimeFeatureEmbedding, self).__init__()
-
-        d_inp = 3
-        self.embed = nn.Linear(d_inp, d_model)
+        
+        # 修改输入维度为新的时间特征维度
+        self.embed = nn.Linear(time_dim, d_model, bias=False)
 
     def forward(self, x):
         return self.embed(x)
@@ -109,20 +109,14 @@ class DataEmbedding(nn.Module):
         super(DataEmbedding, self).__init__()
 
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model)
-        self.position_embedding = PositionalEmbedding(d_model=d_model)
-        self.temporal_embedding = (
-            TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
-            if embed_type != "timeF"
-            else TimeFeatureEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
-        )
+        
+        # 时间特征维度现在是5 (hour, weekday, month, season_sin, season_cos)
+        self.temporal_embedding = TimeFeatureEmbedding(d_model=d_model, embed_type=embed_type, freq=freq, time_dim=5)
 
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x, x_mark):
-        x = (
-            self.value_embedding(x)
-            + self.position_embedding(x)
-            + self.temporal_embedding(x_mark)
-        )
-
+        x = self.value_embedding(x)
+        x = x + self.temporal_embedding(x_mark)
+        
         return self.dropout(x)

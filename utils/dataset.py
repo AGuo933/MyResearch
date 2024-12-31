@@ -64,13 +64,21 @@ class TimeSeriesDataset(Dataset):
             raise
 
     def _extract_time_features(self, time_series):
-        # 提取时间特征：小时、星期几、月份等
+        # 基础时间特征
         hour = time_series.dt.hour.values / 24.0
         weekday = time_series.dt.weekday.values / 7.0
         month = (time_series.dt.month.values - 1) / 11.0
-
-        # 组合时间特征
-        time_features = np.stack([hour, weekday, month], axis=1)
+        
+        # 添加季节特征（使用正弦和余弦变换以保持连续性）
+        season_progress = 2 * np.pi * (time_series.dt.month.values - 1) / 12.0
+        season_sin = np.sin(season_progress)
+        season_cos = np.cos(season_progress)
+        
+        # 组合所有特征
+        time_features = np.stack([
+            hour, weekday, month, season_sin, season_cos
+        ], axis=1)
+        
         return time_features
 
     def __len__(self):
