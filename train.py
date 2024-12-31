@@ -16,9 +16,9 @@ logging.basicConfig(
 )
 
 # 超参数
-BATCH_SIZE = 32
-LEARNING_RATE = 0.001
-WEIGHT_DECAY = 0.01
+BATCH_SIZE = 64
+LEARNING_RATE = 0.0001
+WEIGHT_DECAY = 0.0001
 EPOCHS = 100
 TRAIN_RATIO = 0.8
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -28,39 +28,63 @@ def train_one_epoch(model, train_loader, criterion, optimizer):
     """训练一个epoch"""
     model.train()
     total_loss = 0
+    valid_batches = 0
+
     for batch_x, batch_y, batch_x_mark in train_loader:
         optimizer.zero_grad()
 
-        # 将数据移到GPU并确保数据类型
-        batch_x = batch_x.float().to(DEVICE)
-        batch_x_mark = batch_x_mark.float().to(DEVICE)
-        batch_y = batch_y.float().to(DEVICE)
+        # 检查输入数据是否包含NaN
+        if (
+            torch.isnan(batch_x).any()
+            or torch.isnan(batch_y).any()
+            or torch.isnan(batch_x_mark).any()
+        ):
+            print("Skipping batch with NaN inputs")
+            continue
 
-        # 添加梯度裁剪
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        # 将数据移到GPU并确保数据类型和requires_grad
+        batch_x = batch_x.float().requires_grad_(True).to(DEVICE)
+        batch_x_mark = batch_x_mark.float().requires_grad_(True).to(DEVICE)
+        batch_y = batch_y.float().to(DEVICE)
 
         # 前向传播
         output = model(batch_x, batch_x_mark)
+
+        if output is None:
+            print("Model returned None output")
+            continue
+
         output = output.squeeze()
         batch_y = batch_y.squeeze()
 
-        # 检查并打印数值
-        if torch.isnan(output).any() or torch.isnan(batch_y).any():
-            print("NaN detected in output or target!")
-            print("Output:", output)
-            print("Target:", batch_y)
+        # 检查输出是否有效
+        if torch.isnan(output).any():
+            print("NaN detected in model output")
             continue
 
         # 计算损失
-        loss = criterion(output, batch_y)
+        try:
+            loss = criterion(output, batch_y)
 
-        # 反向传播
-        loss.backward()
-        optimizer.step()
+            # 反向传播
+            loss.backward()
 
-        total_loss += loss.item() * batch_x.size(0)
+            # 梯度裁剪
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-    return total_loss / len(train_loader.dataset)
+            optimizer.step()
+
+            total_loss += loss.item() * batch_x.size(0)
+            valid_batches += 1
+
+        except RuntimeError as e:
+            print(f"Error in training step: {e}")
+            continue
+
+    if valid_batches == 0:
+        return float("inf")
+
+    return total_loss / (valid_batches * BATCH_SIZE)
 
 
 def validate(model, val_loader, criterion):
@@ -91,6 +115,12 @@ def validate(model, val_loader, criterion):
     mae = np.mean(np.abs(np.array(predictions) - np.array(actuals)))
 
     return val_loss, rmse, mae
+
+
+def combined_loss(pred, target):
+    criterion = nn.MSELoss()
+    mae_loss = nn.L1Loss()
+    return criterion(pred, target) + 0.1 * mae_loss(pred, target)
 
 
 def main():
@@ -140,7 +170,7 @@ def main():
 
     # 添加学习率调度器
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=5, verbose=True
+        optimizer, mode="min", factor=0.5, patience=5
     )
 
     # 参考CNN-Informer的训练循环
