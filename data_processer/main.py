@@ -1,16 +1,14 @@
-import pandas as pd
 from helper_functions import (
     load_scada_data,
-    load_scada_logs,
-    load_annotations,
-    generate_data_overview,
-    plot_overview_cockpit,
-    plot_summary,
+    plot_power_scatter,
+    clean_power_curve_data,
+    save_cleaned_data,
+    analyze_power_correlations,
 )
 
 
 def main():
-    base_path = "data/"
+    base_path = "data/originalData/"
 
     # Define file lists for each data type
     scada_files = [
@@ -18,33 +16,26 @@ def main():
         "Wind-Turbine-SCADA-signals-2017_0.csv",
     ]
 
-    log_files = [
-        "Wind-Turbines-Logs-2016.csv",
-        "Wind Turbines Logs 2017.csv",
-    ]
-
-    annotation_files = [
-        "Historical-Failure-Logbook-2016.csv",
-        "opendata-wind-failures-2017.csv",
-    ]
-
     # Load all data
     dct_scada = load_scada_data(base_path, scada_files)
-    dct_logs = load_scada_logs(base_path, log_files)
-    dct_annot = load_annotations(base_path, annotation_files)
 
-    # Generate overview
-    df_data_overview = generate_data_overview(dct_scada, dct_logs)
+    # 为每个涡轮机绘制功率散点图
+    for trb_id in dct_scada.keys():
+        # 清洗数据
+        df_clean = clean_power_curve_data(dct_scada[trb_id])
 
-    # Plot for each turbine
-    for trb_id in list(dct_scada.keys()):
-        plot_overview_cockpit(
-            base_path, dct_scada, df_data_overview, trb_id, freq_="10T"
+        correlations = analyze_power_correlations(
+            df_clean, plot_heatmap=True, trb_id=trb_id
         )
 
-        # Plot summary with available annotations
-        plot_summary(
-            trb_id, df_data_overview.loc[trb_id], dct_annot.get(trb_id, pd.DataFrame())
+        # 保存清洗后的数据
+        save_cleaned_data(df_clean, trb_id)
+
+        # 绘制功率散点图
+        plot_power_scatter(
+            df_scada=df_clean,
+            trb_id=trb_id,
+            save_path=f"images/power_curve_turbine_after_clean_{trb_id}.png",
         )
 
 
