@@ -35,23 +35,23 @@ def plot_prediction_comparison(predictions, actuals, save_dir):
     x = np.arange(len(predictions))
     
     # 绘制实际值和预测值
-    plt.plot(x, actuals, label='实际值', color='blue', linewidth=2)
-    plt.plot(x, predictions, label='预测值', color='red', linewidth=2)
+    plt.plot(x, actuals, label='实际功率', color='blue', linewidth=2)
+    plt.plot(x, predictions, label='预测功率', color='red', linewidth=2)
     
     # 添加误差区域
     error = predictions - actuals
-    plt.fill_between(x, np.zeros_like(x), error, 
-                    where=(error >= 0), 
+    plt.fill_between(x, actuals, predictions, 
+                    where=(predictions >= actuals), 
                     color='red', alpha=0.3, 
-                    label='正误差')
-    plt.fill_between(x, np.zeros_like(x), error, 
-                    where=(error <= 0), 
+                    label='过估计')
+    plt.fill_between(x, actuals, predictions, 
+                    where=(predictions <= actuals), 
                     color='blue', alpha=0.3, 
-                    label='负误差')
+                    label='低估计')
     
-    plt.xlabel('样本')
-    plt.ylabel('RUL')
-    plt.title('RUL预测结果对比')
+    plt.xlabel('样本数')
+    plt.ylabel('功率 (kW)')
+    plt.title('功率预测结果对比')
     plt.legend()
     plt.grid(True)
     plt.savefig(save_dir / 'rul_prediction.png', dpi=300, bbox_inches='tight')
@@ -78,16 +78,21 @@ def plot_error_distribution(predictions, actuals, save_dir):
     
     # 添加均值线
     plt.axhline(y=mean_error, color='r', linestyle='--', alpha=0.5, 
-               label=f'平均误差: {mean_error:.2f}')
+               label=f'平均误差: {mean_error:.2f}kW')
     
     # 添加标准差范围
     plt.fill_between(x, mean_error - std_error, mean_error + std_error,
                     color='gray', alpha=0.2, 
-                    label=f'标准差范围: ±{std_error:.2f}')
+                    label=f'标准差范围: ±{std_error:.2f}kW')
     
-    plt.xlabel('样本')
-    plt.ylabel('误差值')
-    plt.title('每个样本的预测误差')
+    # 设置y轴范围为误差的均值±3倍标准差，或者使用实际误差的最大最小值
+    y_max = min(max(errors), mean_error + 3*std_error)
+    y_min = max(min(errors), mean_error - 3*std_error)
+    plt.ylim(y_min, y_max)
+    
+    plt.xlabel('样本数')
+    plt.ylabel('功率误差 (kW)')
+    plt.title('功率预测误差分布')
     plt.legend()
     plt.grid(True)
     plt.savefig(save_dir / 'error_distribution.png', dpi=300, bbox_inches='tight')

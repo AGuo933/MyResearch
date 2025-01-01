@@ -67,8 +67,19 @@ def get_predictions(model, val_loader):
             output = output.squeeze()
             batch_y = batch_y.squeeze()
             
-            predictions.extend(output.cpu().numpy())
-            actuals.extend(batch_y.cpu().numpy())
+            # 获取当前批次的数据集
+            dataset = val_loader.dataset.datasets[0] if isinstance(val_loader.dataset, ConcatDataset) else val_loader.dataset
+            
+            # 反归一化预测值和实际值
+            output_np = output.cpu().numpy()
+            batch_y_np = batch_y.cpu().numpy()
+            
+            # 使用数据集的scaler进行反归一化
+            predictions_denorm = output_np * dataset.target_scaler.scale_[0] + dataset.target_scaler.mean_[0]
+            actuals_denorm = batch_y_np * dataset.target_scaler.scale_[0] + dataset.target_scaler.mean_[0]
+            
+            predictions.extend(predictions_denorm)
+            actuals.extend(actuals_denorm)
     
     return np.array(predictions), np.array(actuals)
 
@@ -79,7 +90,7 @@ def main():
     
     # 加载最新的模型
     model_dir = Path("saved_models")
-    model_files = list(model_dir.glob("*/best_model_*.pth"))
+    model_files = list(model_dir.glob("*/best_model.pth"))
     if not model_files:
         raise ValueError("No model files found!")
     
