@@ -105,7 +105,7 @@ class Informer(nn.Module):
             enc_out = F.relu(self.pre_fc(enc_out))
             enc_out = self.fc(enc_out)
 
-            return enc_out, attns
+            return enc_out
 
         except Exception as e:
             logging.error(f"Error in model forward pass: {str(e)}")

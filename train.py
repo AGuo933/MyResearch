@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from utils.dataset import TimeSeriesDataset
 from models.model import Informer
+from utils.visualization import plot_all
 
 # 配置日志
 logging.basicConfig(
@@ -61,7 +62,7 @@ def train_one_epoch(model, train_loader, criterion, optimizer):
             batch_y = batch_y.float().to(DEVICE)
 
             # 前向传播
-            output, _ = model(batch_x, batch_x_mark)  # 忽略注意力权重
+            output = model(batch_x, batch_x_mark)  # 忽略注意力权重
 
             if output is None:
                 logging.error(
@@ -110,7 +111,7 @@ def validate(model, val_loader, criterion):
     actuals = []
 
     with torch.no_grad():
-        for batch_x, batch_y, batch_x_mark in val_loader:  # 修改这里，只接收3个值
+        for batch_x, batch_y, batch_x_mark in val_loader:
             batch_x = batch_x.to(DEVICE)
             batch_x_mark = batch_x_mark.to(DEVICE)
             batch_y = batch_y.to(DEVICE)
@@ -129,7 +130,7 @@ def validate(model, val_loader, criterion):
     rmse = np.sqrt(val_loss)
     mae = np.mean(np.abs(np.array(predictions) - np.array(actuals)))
 
-    return val_loss, rmse, mae
+    return val_loss, rmse, mae, np.array(predictions), np.array(actuals)
 
 
 def combined_loss(pred, target):
@@ -140,14 +141,19 @@ def combined_loss(pred, target):
 
 def main():
     try:
-        # 创建保存模型的目录
-        save_dir = Path("saved_models")
-        save_dir.mkdir(exist_ok=True)
+        # 创建带有时间戳的保存模型目录
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        save_dir = Path(f"saved_models/{timestamp}")
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        # 设置模型保存路径
+        best_model_path = save_dir / "best_model.pth"
 
         logging.info("Starting model training with configuration:")
         logging.info(f"Batch Size: {BATCH_SIZE}, Learning Rate: {LEARNING_RATE}")
         logging.info(f"Weight Decay: {WEIGHT_DECAY}, Epochs: {EPOCHS}")
         logging.info(f"Device: {DEVICE}")
+        logging.info(f"Model will be saved to: {save_dir}")
 
         # 加载所有风机的数据
         turbines = ["T01", "T06", "T07", "T11"]
@@ -215,12 +221,17 @@ def main():
 
         # 记录最佳模型
         best_val_loss = float("inf")
-        best_model_path = "saved_models/best_model.pth"
+
+        # 记录最佳模型的预测结果
+        best_predictions = None
+        best_actuals = None
 
         # 训练循环
         train_loss_list = []
         test_loss_list = []
         no_improvement_count = 0
+        train_losses = []
+        val_losses = []
 
         for epoch in range(EPOCHS):
             logging.info(f"\nStarting Epoch {epoch+1}/{EPOCHS}")
@@ -229,7 +240,7 @@ def main():
             train_loss = train_one_epoch(model, train_loader, criterion, optimizer)
 
             # 验证
-            val_loss, rmse, mae = validate(model, val_loader, criterion)
+            val_loss, rmse, mae, predictions, actuals = validate(model, val_loader, criterion)
 
             # 更新学习率
             old_lr = optimizer.param_groups[0]["lr"]
@@ -244,10 +255,14 @@ def main():
             # 记录损失
             train_loss_list.append(train_loss)
             test_loss_list.append(val_loss)
+            train_losses.append(train_loss)
+            val_losses.append(val_loss)
 
-            # 保存最佳模型
+            # 如果是最佳模型，保存预测结果
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
+                best_predictions = predictions
+                best_actuals = actuals
                 torch.save(
                     {
                         "epoch": epoch,
@@ -255,12 +270,12 @@ def main():
                         "optimizer_state_dict": optimizer.state_dict(),
                         "train_loss": train_loss,
                         "val_loss": val_loss,
+                        "train_losses": train_losses,
+                        "val_losses": val_losses,
                     },
                     best_model_path,
                 )
-                logging.info(
-                    f"New best model saved! Previous best: {best_val_loss:.4f}, New best: {val_loss:.4f}"
-                )
+                logging.info(f"New best model saved! Previous best: {best_val_loss:.4f}, New best: {val_loss:.4f}")
                 no_improvement_count = 0
             else:
                 no_improvement_count += 1
@@ -282,6 +297,23 @@ def main():
         checkpoint = torch.load(best_model_path)
         model.load_state_dict(checkpoint["model_state_dict"])
         logging.info(f"Training completed. Best validation loss: {best_val_loss:.4f}")
+
+        # 训练完成后绘制图表
+        logging.info("Generating visualization plots...")
+        
+        # 创建可视化结果保存目录
+        vis_save_dir = save_dir / "visualization"
+        vis_save_dir.mkdir(exist_ok=True)
+        
+        # 使用最佳模型的预测结果绘制图表
+        plot_all(
+            predictions=best_predictions,
+            actuals=best_actuals,
+            train_losses=train_losses,
+            val_losses=val_losses,
+            save_dir=vis_save_dir
+        )
+        logging.info(f"Visualization results saved to {vis_save_dir}")
 
     except Exception as e:
         logging.error(f"Training failed with error: {str(e)}")
