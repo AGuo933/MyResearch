@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, ConcatDataset
@@ -7,6 +8,7 @@ import logging
 from datetime import datetime
 from utils.dataset import TimeSeriesDataset
 from models.model import Informer
+from utils.visualization import plot_all
 
 # 配置日志
 logging.basicConfig(
@@ -22,6 +24,26 @@ WEIGHT_DECAY = 0.0001
 EPOCHS = 100
 TRAIN_RATIO = 0.8
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def score_function(prediction_list, true_y):
+    """
+    根据误差百分比计算评分函数，对正负误差采用相同的惩罚力度。
+    
+    Args:
+        prediction_list: RUL预测值
+        true_y: RUL真实值
+    
+    Returns:
+        float: 对应的评分
+    """
+    score = 0
+    for predicted, actual in zip(prediction_list, true_y):
+        percent_error = (actual-predicted)/(actual+0.0001)
+        # 统一使用相同的惩罚系数10
+        score += np.exp(np.log(0.5) * abs(percent_error) / 10)
+            
+    return score/len(prediction_list)
 
 
 def train_one_epoch(model, train_loader, criterion, optimizer):
@@ -86,30 +108,41 @@ def validate(model, val_loader, criterion):
     """验证模型性能"""
     model.eval()
     total_loss = 0
+    total_mae_loss = 0
     predictions = []
     actuals = []
-
+    
     with torch.no_grad():
-        for batch_x, batch_y, batch_x_mark in val_loader:  # 修改这里，只接收3个值
+        for batch_x, batch_y, batch_x_mark in val_loader:
             batch_x = batch_x.to(DEVICE)
             batch_x_mark = batch_x_mark.to(DEVICE)
             batch_y = batch_y.to(DEVICE)
-
+            
             output = model(batch_x, batch_x_mark)
             output = output.squeeze()
             batch_y = batch_y.squeeze()
-
+            
+            # MSE损失
             loss = criterion(output, batch_y)
             total_loss += loss.item() * batch_x.size(0)
-
+            
+            # MAE损失
+            mae_loss = nn.L1Loss()(output, batch_y)
+            total_mae_loss += mae_loss.item() * batch_x.size(0)
+            
             predictions.extend(output.cpu().numpy())
             actuals.extend(batch_y.cpu().numpy())
-
-    val_loss = total_loss / len(val_loader.dataset)
-    rmse = np.sqrt(val_loss)
-    mae = np.mean(np.abs(np.array(predictions) - np.array(actuals)))
-
-    return val_loss, rmse, mae
+    
+    predictions = np.array(predictions)
+    actuals = np.array(actuals)
+    
+    # 计算各种评估指标
+    val_loss = total_loss / len(val_loader.dataset)  # MSE
+    mae = total_mae_loss / len(val_loader.dataset)   # MAE
+    rmse = np.sqrt(val_loss)                         # RMSE
+    score = score_function(predictions, actuals)      # Score
+    
+    return val_loss, rmse, mae, score, predictions, actuals
 
 
 def combined_loss(pred, target):
@@ -120,10 +153,12 @@ def combined_loss(pred, target):
 
 def main():
     try:
-        # 创建保存模型的目录
-        save_dir = Path("saved_models")
-        save_dir.mkdir(exist_ok=True)
+        # 创建带有时间戳的保存模型目录
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        save_dir = Path(f"saved_models/{timestamp}")
+        save_dir.mkdir(parents=True, exist_ok=True)
 
+        logging.info(f"Model outputs will be saved to: {save_dir}")
         logging.info("Starting model training with configuration:")
         logging.info(f"Batch Size: {BATCH_SIZE}, Learning Rate: {LEARNING_RATE}")
         logging.info(f"Weight Decay: {WEIGHT_DECAY}, Epochs: {EPOCHS}")
@@ -194,6 +229,8 @@ def main():
         train_loss_list = []
         test_loss_list = []
         best_val_loss = float("inf")
+        best_predictions = None
+        best_actuals = None
         no_improvement_count = 0
 
         for epoch in range(EPOCHS):
@@ -203,7 +240,7 @@ def main():
             train_loss = train_one_epoch(model, train_loader, criterion, optimizer)
 
             # 验证
-            val_loss, rmse, mae = validate(model, val_loader, criterion)
+            val_loss, rmse, mae, score, predictions, actuals = validate(model, val_loader, criterion)
 
             # 更新学习率
             old_lr = optimizer.param_groups[0]["lr"]
@@ -219,13 +256,12 @@ def main():
             train_loss_list.append(train_loss)
             test_loss_list.append(val_loss)
 
-            # 保存最佳模型
+            # 保存最佳模型和对应的预测结果
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                model_path = (
-                    save_dir
-                    / f'best_model_{datetime.now().strftime("%Y%m%d_%H%M")}.pth'
-                )
+                best_predictions = predictions
+                best_actuals = actuals
+                model_path = save_dir / f'best_model_{timestamp}.pth'
                 torch.save(model.state_dict(), model_path)
                 logging.info(
                     f"New best model saved! Previous best: {best_val_loss:.4f}, New best: {val_loss:.4f}"
@@ -233,13 +269,23 @@ def main():
                 no_improvement_count = 0
             else:
                 no_improvement_count += 1
-                if no_improvement_count >= 10:
-                    logging.warning(f"No improvement for {no_improvement_count} epochs")
-
+                
             # 打印训练信息
             logging.info(f"Epoch {epoch+1} Summary:")
             logging.info(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
             logging.info(f"RMSE: {rmse:.4f}, MAE: {mae:.4f}")
+            logging.info(f"Score: {score:.4f}")
+
+        # 训练结束后绘制所有图表
+        logging.info("Training completed. Generating visualization plots...")
+        save_dir = plot_all(
+            predictions=best_predictions,
+            actuals=best_actuals,
+            train_losses=train_loss_list,
+            val_losses=test_loss_list,
+            save_dir=save_dir
+        )
+        logging.info(f"All plots have been saved to {save_dir}")
 
     except Exception as e:
         logging.error(f"Training failed with error: {str(e)}")
