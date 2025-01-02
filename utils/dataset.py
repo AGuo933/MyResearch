@@ -35,24 +35,19 @@ class TimeSeriesDataset(Dataset):
             normalized_features = self.feature_scaler.fit_transform(features)
             self.feature_means = features.mean(axis=0)
 
-            # 3. 归一化目标值
-            self.target_scaler = StandardScaler()
-            normalized_labels = self.target_scaler.fit_transform(
-                df.iloc[:, -1].values.reshape(-1, 1)
-            )
-            self.label_mean = df.iloc[:, -1].mean()
-            self.label_std = self.target_scaler.scale_
+            # 3. 获取原始标签值（不进行归一化）
+            labels = df.iloc[:, -1].values.reshape(-1, 1)
 
             # 4. 划分训练集/验证集
             train_size = int(len(df) * train_ratio)
             if train:
                 self.features = torch.FloatTensor(normalized_features[:train_size])
-                self.labels = torch.FloatTensor(normalized_labels[:train_size])
+                self.labels = torch.FloatTensor(labels[:train_size])
                 self.time_features = torch.FloatTensor(time_features[:train_size])
                 logging.info(f"Training set created with {train_size} samples")
             else:
                 self.features = torch.FloatTensor(normalized_features[train_size:])
-                self.labels = torch.FloatTensor(normalized_labels[train_size:])
+                self.labels = torch.FloatTensor(labels[train_size:])
                 self.time_features = torch.FloatTensor(time_features[train_size:])
                 logging.info(
                     f"Validation set created with {len(df) - train_size} samples"

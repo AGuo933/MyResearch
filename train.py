@@ -122,33 +122,28 @@ def validate(model, val_loader, criterion):
             output = output.squeeze()
             batch_y = batch_y.squeeze()
             
-            # 获取当前批次的数据集
-            dataset = val_loader.dataset.datasets[0] if isinstance(val_loader.dataset, ConcatDataset) else val_loader.dataset
-            
-            # 计算归一化状态下的损失（用于训练）
+            # 计算损失
             loss = criterion(output, batch_y)
             total_loss += loss.item() * batch_x.size(0)
             mae_loss = nn.L1Loss()(output, batch_y)
             total_mae_loss += mae_loss.item() * batch_x.size(0)
             
-            # 反归一化预测值和实际值
+            # 直接使用原始值
             output_np = output.cpu().numpy()
             batch_y_np = batch_y.cpu().numpy()
-            predictions_denorm = output_np * dataset.target_scaler.scale_[0] + dataset.target_scaler.mean_[0]
-            actuals_denorm = batch_y_np * dataset.target_scaler.scale_[0] + dataset.target_scaler.mean_[0]
             
-            predictions.extend(predictions_denorm)
-            actuals.extend(actuals_denorm)
+            predictions.extend(output_np)
+            actuals.extend(batch_y_np)
     
     predictions = np.array(predictions)
     actuals = np.array(actuals)
     
-    # 计算各种评估指标（使用归一化后的损失）
+    # 计算各种评估指标
     val_loss = total_loss / len(val_loader.dataset)  # MSE
     mae = total_mae_loss / len(val_loader.dataset)   # MAE
     rmse = np.sqrt(val_loss)                         # RMSE
     
-    # 使用反归一化后的值计算score
+    # 使用原始值计算score
     score = score_function(predictions, actuals)      # Score
     
     return val_loss, rmse, mae, score, predictions, actuals

@@ -67,19 +67,12 @@ def get_predictions(model, val_loader):
             output = output.squeeze()
             batch_y = batch_y.squeeze()
             
-            # 获取当前批次的数据集
-            dataset = val_loader.dataset.datasets[0] if isinstance(val_loader.dataset, ConcatDataset) else val_loader.dataset
-            
-            # 反归一化预测值和实际值
+            # 直接使用原始值
             output_np = output.cpu().numpy()
             batch_y_np = batch_y.cpu().numpy()
             
-            # 使用数据集的scaler进行反归一化
-            predictions_denorm = output_np * dataset.target_scaler.scale_[0] + dataset.target_scaler.mean_[0]
-            actuals_denorm = batch_y_np * dataset.target_scaler.scale_[0] + dataset.target_scaler.mean_[0]
-            
-            predictions.extend(predictions_denorm)
-            actuals.extend(actuals_denorm)
+            predictions.extend(output_np)
+            actuals.extend(batch_y_np)
     
     return np.array(predictions), np.array(actuals)
 

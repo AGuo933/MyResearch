@@ -54,7 +54,7 @@ def plot_prediction_comparison(predictions, actuals, save_dir):
     plt.title('功率预测结果对比')
     plt.legend()
     plt.grid(True)
-    plt.savefig(save_dir / 'rul_prediction.png', dpi=300, bbox_inches='tight')
+    plt.savefig(save_dir / 'power_prediction.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 def plot_error_distribution(predictions, actuals, save_dir):
