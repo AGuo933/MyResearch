@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, ConcatDataset
+from torch.utils.data import DataLoader
 import numpy as np
 from pathlib import Path
 import logging
@@ -9,6 +9,7 @@ from datetime import datetime
 from utils.dataset import TimeSeriesDataset
 from models.model import Informer
 from utils.visualization import plot_all
+import json
 
 # 配置日志
 logging.basicConfig(
@@ -123,7 +124,7 @@ def validate(model, val_loader, criterion):
             batch_y = batch_y.squeeze()
             
             # 获取当前批次的数据集
-            dataset = val_loader.dataset.datasets[0] if isinstance(val_loader.dataset, ConcatDataset) else val_loader.dataset
+            dataset = val_loader.dataset
             
             # 计算归一化状态下的损失（用于训练）
             loss = criterion(output, batch_y)
@@ -143,15 +144,20 @@ def validate(model, val_loader, criterion):
     predictions = np.array(predictions)
     actuals = np.array(actuals)
     
-    # 计算各种评估指标（使用归一化后的损失）
-    val_loss = total_loss / len(val_loader.dataset)  # MSE
-    mae = total_mae_loss / len(val_loader.dataset)   # MAE
-    rmse = np.sqrt(val_loss)                         # RMSE
+    # 计算各种评估指标
+    val_loss = total_loss / len(val_loader.dataset)  # MSE（保持归一化状态下的损失不变）
     
-    # 使用反归一化后的值计算score
-    score = score_function(predictions, actuals)      # Score
+    # 使用反归一化后的值计算MAE (公式16)
+    mae = np.mean(np.abs(predictions - actuals))
     
-    return val_loss, rmse, mae, score, predictions, actuals
+    # 使用反归一化后的值计算RMSE (公式17)
+    rmse = np.sqrt(np.mean((predictions - actuals) ** 2))
+    
+    # 计算R² (公式15)
+    y_mean = np.mean(actuals)
+    r2 = 1 - np.sum((actuals - predictions) ** 2) / np.sum((actuals - y_mean) ** 2)
+    
+    return val_loss, rmse, mae, r2, predictions, actuals
 
 
 def combined_loss(pred, target):
@@ -173,42 +179,29 @@ def main():
         logging.info(f"Weight Decay: {WEIGHT_DECAY}, Epochs: {EPOCHS}")
         logging.info(f"Device: {DEVICE}")
 
-        # 加载所有风机的数据
-        turbines = ["T01", "T06", "T07", "T11"]
-        train_datasets = []
-        val_datasets = []
-
-        for turbine in turbines:
-            data_path = f"data/cleaned_data/turbine_{turbine}_cleaned.csv"
-            try:
-                train_dataset = TimeSeriesDataset(
-                    data_path, train=True, train_ratio=TRAIN_RATIO
-                )
-                val_dataset = TimeSeriesDataset(
-                    data_path, train=False, train_ratio=TRAIN_RATIO
-                )
-
-                train_datasets.append(train_dataset)
-                val_datasets.append(val_dataset)
-                logging.info(f"Successfully loaded data for turbine {turbine}")
-            except Exception as e:
-                logging.error(f"Failed to load data for turbine {turbine}: {str(e)}")
-                raise
-
-        # 合并数据集
-        combined_train_dataset = ConcatDataset(train_datasets)
-        combined_val_dataset = ConcatDataset(val_datasets)
+        # 加载T01风机的数据
+        data_path = "data/cleaned_data/turbine_T01_cleaned.csv"
+        try:
+            train_dataset = TimeSeriesDataset(
+                data_path, train=True, train_ratio=TRAIN_RATIO
+            )
+            val_dataset = TimeSeriesDataset(
+                data_path, train=False, train_ratio=TRAIN_RATIO
+            )
+            logging.info("Successfully loaded data for turbine T01")
+        except Exception as e:
+            logging.error(f"Failed to load data for turbine T01: {str(e)}")
+            raise
 
         train_loader = DataLoader(
-            combined_train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4
+            train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, drop_last=True
         )
         val_loader = DataLoader(
-            combined_val_dataset, batch_size=BATCH_SIZE, num_workers=4
+            val_dataset, batch_size=BATCH_SIZE, num_workers=4, drop_last=True
         )
 
         # 获取特征维度
-        first_dataset = train_datasets[0]
-        feature_dim = first_dataset.feature_dim
+        feature_dim = train_dataset.feature_dim
 
         # 初始化模型
         model = Informer(
@@ -249,7 +242,7 @@ def main():
             train_loss = train_one_epoch(model, train_loader, criterion, optimizer)
 
             # 验证
-            val_loss, rmse, mae, score, predictions, actuals = validate(model, val_loader, criterion)
+            val_loss, rmse, mae, r2, predictions, actuals = validate(model, val_loader, criterion)
 
             # 更新学习率
             old_lr = optimizer.param_groups[0]["lr"]
@@ -270,11 +263,29 @@ def main():
                 best_val_loss = val_loss
                 best_predictions = predictions
                 best_actuals = actuals
+                best_metrics = {
+                    'val_loss': float(val_loss),
+                    'rmse': float(rmse),
+                    'mae': float(mae),
+                    'r2': float(r2),
+                    'epoch': epoch + 1,
+                    'learning_rate': float(optimizer.param_groups[0]['lr']),
+                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                
+                # 保存模型
                 model_path = save_dir / 'best_model.pth'
                 torch.save(model.state_dict(), model_path)
+                
+                # 保存评估指标
+                metrics_path = save_dir / 'best_metrics.json'
+                with open(metrics_path, 'w') as f:
+                    json.dump(best_metrics, f, indent=4)
+                
                 logging.info(
                     f"New best model saved! Previous best: {best_val_loss:.4f}, New best: {val_loss:.4f}"
                 )
+                logging.info(f"Best metrics saved to: {metrics_path}")
                 no_improvement_count = 0
             else:
                 no_improvement_count += 1
@@ -283,7 +294,7 @@ def main():
             logging.info(f"Epoch {epoch+1} Summary:")
             logging.info(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
             logging.info(f"RMSE: {rmse:.4f}, MAE: {mae:.4f}")
-            logging.info(f"Score: {score:.4f}")
+            logging.info(f"R2: {r2:.4f}")
 
         # 训练结束后绘制所有图表
         logging.info("Training completed. Generating visualization plots...")
