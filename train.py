@@ -26,27 +26,6 @@ EPOCHS = 100
 TRAIN_RATIO = 0.8
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
-def score_function(prediction_list, true_y):
-    """
-    根据误差百分比计算评分函数，对正负误差采用相同的惩罚力度。
-    
-    Args:
-        prediction_list: RUL预测值
-        true_y: RUL真实值
-    
-    Returns:
-        float: 对应的评分
-    """
-    score = 0
-    for predicted, actual in zip(prediction_list, true_y):
-        percent_error = (actual-predicted)/(actual+0.0001)
-        # 统一使用相同的惩罚系数10
-        score += np.exp(np.log(0.5) * abs(percent_error) / 10)
-            
-    return score/len(prediction_list)
-
-
 def train_one_epoch(model, train_loader, criterion, optimizer):
     """训练一个epoch"""
     model.train()
